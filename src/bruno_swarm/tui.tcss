@@ -1,0 +1,68 @@
+/* Bruno Swarm TUI Stylesheet */
+
+/* Mode indicator bar */
+ModeIndicator {
+    dock: top;
+    height: 1;
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+}
+
+/* Agent sidebar */
+AgentSidebar {
+    width: 28;
+    dock: left;
+    border-right: solid $primary;
+    padding: 1 0;
+}
+
+#sidebar-title {
+    text-align: center;
+    text-style: bold;
+    padding: 0 1 1 1;
+    color: $text;
+}
+
+AgentStatusLine {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+AgentStatusLine.status-idle {
+    color: $text-muted;
+}
+
+AgentStatusLine.status-working {
+    color: $warning;
+    text-style: bold;
+}
+
+AgentStatusLine.status-done {
+    color: $success;
+}
+
+AgentStatusLine.status-error {
+    color: $error;
+}
+
+/* Chat log area */
+#chat-log {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+    border: none;
+}
+
+/* Main content area */
+#main-content {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* Task input */
+#task-input {
+    dock: bottom;
+    margin: 0 1;
+}

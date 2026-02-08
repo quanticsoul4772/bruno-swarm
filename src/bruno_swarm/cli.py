@@ -164,6 +164,7 @@ def create_hierarchical_crew(
     base_url: str,
     agent_names: list[str] | None = None,
     agent_cache: dict | None = None,
+    step_callback=None,
 ):
     """Create a hierarchical crew using sequential process.
 
@@ -233,7 +234,7 @@ def create_hierarchical_crew(
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
-        step_callback=make_step_callback(console),
+        step_callback=step_callback if step_callback is not None else make_step_callback(console),
     )
 
 
@@ -242,6 +243,7 @@ def create_flat_crew(
     base_url: str,
     agent_names: list[str] | None = None,
     agent_cache: dict | None = None,
+    step_callback=None,
 ):
     """Create a flat sequential crew without orchestrator.
 
@@ -277,7 +279,7 @@ def create_flat_crew(
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
-        step_callback=make_step_callback(console),
+        step_callback=step_callback if step_callback is not None else make_step_callback(console),
     )
 
 
@@ -835,6 +837,37 @@ def check_status(ollama_url: str):
                     console.print(f"  [green]{name}[/] {size_str}")
     except Exception:
         pass  # /api/ps may not be available in older Ollama versions
+
+
+@cli.command("tui")
+@click.option(
+    "--ollama-url",
+    "-u",
+    default=DEFAULT_OLLAMA_URL,
+    help=f"Ollama server URL (default: {DEFAULT_OLLAMA_URL})",
+)
+@click.option("--flat", is_flag=True, help="Start in flat mode (no orchestrator)")
+@click.option(
+    "--agents",
+    "-a",
+    default=None,
+    help="Comma-separated agent names",
+)
+def launch_tui(ollama_url: str, flat: bool, agents: str | None):
+    """Launch the interactive chat TUI (requires textual).
+
+    A full-screen terminal interface for running the agent swarm.
+    Install textual with: pip install bruno-swarm[tui]
+    """
+    _validate_ollama_url(ollama_url)
+    agent_names = _parse_agents(agents)
+    try:
+        from .tui import run_tui
+    except ImportError:
+        console.print("[red]Textual is not installed.[/]")
+        console.print("Install with: [cyan]pip install bruno-swarm[tui][/]")
+        sys.exit(1)
+    run_tui(ollama_url=ollama_url, flat=flat, agent_names=agent_names)
 
 
 def main() -> None:
