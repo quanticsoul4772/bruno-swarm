@@ -186,11 +186,14 @@ EXPECTED_OUTPUTS = {
 
 
 def make_step_callback(console):
-    """Factory returning a CrewAI step_callback that prints progress to *console*."""
+    """Factory returning a CrewAI step_callback that prints progress to *console*.
+
+    Note: CrewAI passes AgentAction/AgentFinish to step callbacks, which don't
+    carry agent identity. This crew-level callback can only print a generic message.
+    For per-agent identification, assign individual callbacks to each agent.
+    """
 
     def _step_callback(step_output):
-        agent = getattr(step_output, "agent", None)
-        agent_name = getattr(agent, "role", "Agent") if agent else "Agent"
-        console.print(f"  [cyan]{agent_name}[/] completed a step")
+        console.print("  [cyan]Agent[/] completed a step")
 
     return _step_callback

@@ -132,14 +132,13 @@ class TestMakeStepCallback:
         console = MagicMock()
         cb = make_step_callback(console)
 
-        # Simulate a step_output object
+        # CrewAI passes AgentAction/AgentFinish which don't carry agent identity
         step_output = MagicMock()
-        step_output.agent.role = "Backend Developer"
         cb(step_output)
 
         console.print.assert_called_once()
         printed = console.print.call_args[0][0]
-        assert "Backend Developer" in printed
+        assert "Agent" in printed
 
     def test_callback_handles_missing_agent(self):
         console = MagicMock()

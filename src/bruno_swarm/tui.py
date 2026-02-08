@@ -282,18 +282,17 @@ class SwarmTUI(App):
         # Disable CrewAI tracing
         os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
-        def tui_step_callback(step_output):
-            """CrewAI step callback that updates the TUI sidebar and chat log."""
-            try:
-                agent = getattr(step_output, "agent", None)
-                agent_role = getattr(agent, "role", "Agent") if agent else "Agent"
-                # Reverse-lookup agent name from role
-                agent_name = _ROLE_TO_NAME.get(agent_role)
-                if agent_name:
+        def _make_agent_callback(agent_name, agent_role):
+            """Create a per-agent step callback that knows which agent it belongs to."""
+
+            def cb(step_output):
+                try:
                     self.call_from_thread(sidebar.update_status, agent_name, "working")
-                self.call_from_thread(self._post_agent_step, agent_role)
-            except Exception:
-                pass  # App may be shutting down
+                    self.call_from_thread(self._post_agent_step, agent_role)
+                except Exception:
+                    pass  # App may be shutting down
+
+            return cb
 
         try:
             flat = self.mode == "flat"
@@ -303,7 +302,6 @@ class SwarmTUI(App):
                     self.ollama_url,
                     self.selected_agents,
                     agent_cache=self._agent_cache,
-                    step_callback=tui_step_callback,
                 )
                 first_model = (self.selected_agents or SPECIALISTS)[0]
             else:
@@ -312,9 +310,14 @@ class SwarmTUI(App):
                     self.ollama_url,
                     self.selected_agents,
                     agent_cache=self._agent_cache,
-                    step_callback=tui_step_callback,
                 )
                 first_model = "orchestrator"
+
+            # Assign per-agent step callbacks so each agent identifies itself
+            for agent in crew.agents:
+                role = agent.role
+                name = _ROLE_TO_NAME.get(role, role)
+                agent.step_callback = _make_agent_callback(name, role)
 
             # Pre-warm first model in background
             threading.Thread(
