@@ -7,129 +7,28 @@
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from .config import (
+    AGENT_CONFIGS,
+    DEFAULT_OLLAMA_URL,
+    EXPECTED_OUTPUTS,
+    HF_MODELS,
+    HF_REPO,
+    SPECIALISTS,
+    TASK_TEMPLATES,
+    make_step_callback,
+)
 from .logging import get_logger
 
 logger = get_logger(__name__)
 
 console = Console()
-
-# Default Ollama URL
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-
-# HuggingFace repo for pre-built GGUF models
-HF_REPO = "rawcell/bruno-swarm-models"
-
-# Model filenames on HuggingFace -> Ollama model name mapping
-HF_MODELS = {
-    "orchestrator-14b-f16.gguf": "orchestrator",
-    "frontend-3b-f16.gguf": "frontend",
-    "backend-3b-f16.gguf": "backend",
-    "test-3b-f16.gguf": "test",
-    "security-3b-f16.gguf": "security",
-    "docs-3b-f16.gguf": "docs",
-    "devops-3b-f16.gguf": "devops",
-}
-
-# Agent configurations: name -> (ollama_model, role, goal, backstory)
-AGENT_CONFIGS = {
-    "orchestrator": {
-        "model": "orchestrator",
-        "role": "Senior Software Architect",
-        "goal": "Plan development tasks, design system architecture, and coordinate the team",
-        "backstory": (
-            "Senior architect with 20 years of experience. Thinks step by step, "
-            "breaks complex problems into clear tasks, and delegates to specialists. "
-            "Reviews all work for quality and architectural consistency. "
-            "CRITICAL: You must delegate ONE task at a time to ONE coworker. "
-            "Never send multiple delegations at once."
-        ),
-        "allow_delegation": True,
-    },
-    "frontend": {
-        "model": "frontend",
-        "role": "Frontend Developer",
-        "goal": "Build responsive, user-friendly React components with TypeScript",
-        "backstory": (
-            "Expert in React, TypeScript, Tailwind CSS. Writes clean, concise "
-            "code without over-engineering. Focuses on accessibility and UX. "
-            "IMPORTANT: Output your code and explanation directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-    "backend": {
-        "model": "backend",
-        "role": "Backend Developer",
-        "goal": "Create scalable FastAPI endpoints and database schemas",
-        "backstory": (
-            "Expert in FastAPI, PostgreSQL, async patterns. Focuses on clean "
-            "architecture without premature optimization. Writes clear API contracts. "
-            "IMPORTANT: Output your code and explanation directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-    "test": {
-        "model": "test",
-        "role": "QA Engineer",
-        "goal": "Write comprehensive test suites with high coverage",
-        "backstory": (
-            "Expert in pytest, coverage analysis, edge cases. Proactively writes "
-            "tests for all code paths including error handling and boundary conditions. "
-            "IMPORTANT: Output your tests and explanation directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-    "security": {
-        "model": "security",
-        "role": "Security Engineer",
-        "goal": "Identify vulnerabilities and enforce secure coding practices",
-        "backstory": (
-            "Expert in OWASP Top 10, penetration testing, secure code review. "
-            "Paranoid about security -- catches issues others miss. Reviews all "
-            "code for injection, auth bypass, and data exposure risks. "
-            "IMPORTANT: Output your analysis directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-    "docs": {
-        "model": "docs",
-        "role": "Technical Writer",
-        "goal": "Write clear API docs, README files, and developer guides",
-        "backstory": (
-            "Expert in technical documentation, API references, and developer "
-            "onboarding. Writes concise docs without unnecessary jargon. "
-            "Focuses on examples and practical usage. "
-            "IMPORTANT: Output your documentation directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-    "devops": {
-        "model": "devops",
-        "role": "DevOps Engineer",
-        "goal": "Create Docker configs, CI/CD pipelines, and deployment scripts",
-        "backstory": (
-            "Expert in Docker, GitHub Actions, infrastructure as code. "
-            "Writes practical deployment configurations without overengineering. "
-            "Focuses on reproducibility and security. "
-            "IMPORTANT: Output your configurations directly. "
-            "Never simulate a conversation or generate User/Response patterns."
-        ),
-        "allow_delegation": False,
-    },
-}
-
-# Specialist agent names (all except orchestrator)
-SPECIALISTS = ["frontend", "backend", "test", "security", "docs", "devops"]
 
 
 def _check_crewai():
@@ -161,6 +60,26 @@ def _parse_agents(agents_str: str | None) -> list[str] | None:
         sys.exit(1)
 
     return agent_names
+
+
+def _validate_output_path(raw_path: str) -> Path:
+    """Resolve an output path and warn if it escapes the current directory."""
+    resolved = Path(raw_path).resolve()
+    cwd = Path.cwd().resolve()
+    if not str(resolved).startswith(str(cwd)):
+        console.print(f"[yellow]Warning: writing outside current directory: {resolved}[/]")
+    return resolved
+
+
+def _validate_ollama_url(url: str) -> str:
+    """Validate that the Ollama URL uses http or https scheme."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        console.print(
+            f"[red]Error: --ollama-url must use http:// or https://, got: {parsed.scheme}://[/]"
+        )
+        sys.exit(1)
+    return url
 
 
 def create_llm(model_name: str, base_url: str):
@@ -214,43 +133,6 @@ def create_hierarchical_crew(
     for name in agent_names:
         agents[name] = create_agent(name, base_url)
 
-    # Role-specific task descriptions
-    specialist_tasks = {
-        "backend": (
-            f"Design and implement the backend for: {task_description}\n"
-            "Include API endpoints, schemas, and database models."
-        ),
-        "frontend": (
-            f"Build the frontend components for: {task_description}\n"
-            "Use React with TypeScript and Tailwind CSS."
-        ),
-        "test": (
-            f"Write comprehensive tests for: {task_description}\n"
-            "Use pytest with fixtures. Cover happy paths, edge cases, and error handling."
-        ),
-        "security": (
-            f"Perform a security review of the implementation for: {task_description}\n"
-            "Check for OWASP Top 10 vulnerabilities, auth issues, injection risks."
-        ),
-        "docs": (
-            f"Write documentation for: {task_description}\n"
-            "Include API reference, setup guide, and usage examples."
-        ),
-        "devops": (
-            f"Create deployment configuration for: {task_description}\n"
-            "Include Dockerfile, docker-compose.yml, and CI/CD pipeline."
-        ),
-    }
-
-    specialist_outputs = {
-        "backend": "Complete backend code with API endpoints and schemas",
-        "frontend": "Complete React components with TypeScript types",
-        "test": "Complete pytest test suite with fixtures and assertions",
-        "security": "Security audit report with vulnerability fixes",
-        "docs": "Complete documentation in Markdown format",
-        "devops": "Dockerfile, docker-compose.yml, and CI/CD config",
-    }
-
     tasks = []
 
     # Task 1: Orchestrator plans the architecture
@@ -269,12 +151,12 @@ def create_hierarchical_crew(
 
     # Tasks 2-N: Each specialist implements their part
     for name in agent_names:
-        if name in specialist_tasks:
+        if name in TASK_TEMPLATES:
             tasks.append(
                 Task(
-                    description=specialist_tasks[name],
+                    description=TASK_TEMPLATES[name].format(task=task_description),
                     agent=agents[name],
-                    expected_output=specialist_outputs[name],
+                    expected_output=EXPECTED_OUTPUTS[name],
                 )
             )
 
@@ -292,17 +174,12 @@ def create_hierarchical_crew(
         )
     )
 
-    def _step_callback(step_output):
-        agent = getattr(step_output, "agent", None)
-        agent_name = getattr(agent, "role", "Agent") if agent else "Agent"
-        console.print(f"  [cyan]{agent_name}[/] completed a step")
-
     return Crew(
         agents=list(agents.values()),
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
-        step_callback=_step_callback,
+        step_callback=make_step_callback(console),
     )
 
 
@@ -324,65 +201,23 @@ def create_flat_crew(
     for name in agent_names:
         agents[name] = create_agent(name, base_url)
 
-    # Role-specific task templates
-    task_templates = {
-        "backend": (
-            "Design and implement the backend for: {task}\n"
-            "Include API endpoints, schemas, and database models."
-        ),
-        "frontend": (
-            "Build the frontend components for: {task}\n"
-            "Use React with TypeScript and Tailwind CSS."
-        ),
-        "test": (
-            "Write comprehensive tests for: {task}\n"
-            "Use pytest with fixtures. Cover happy paths, edge cases, and error handling."
-        ),
-        "security": (
-            "Perform a security review of the implementation for: {task}\n"
-            "Check for OWASP Top 10 vulnerabilities, auth issues, injection risks."
-        ),
-        "docs": (
-            "Write documentation for: {task}\n"
-            "Include API reference, setup guide, and usage examples."
-        ),
-        "devops": (
-            "Create deployment configuration for: {task}\n"
-            "Include Dockerfile, docker-compose.yml, and CI/CD pipeline."
-        ),
-    }
-
-    expected_outputs = {
-        "backend": "Complete backend code with API endpoints and schemas",
-        "frontend": "Complete React components with TypeScript types",
-        "test": "Complete pytest test suite with fixtures and assertions",
-        "security": "Security audit report with vulnerability fixes",
-        "docs": "Complete documentation in Markdown format",
-        "devops": "Dockerfile, docker-compose.yml, and CI/CD config",
-    }
-
     tasks = []
     for name in agent_names:
-        if name in task_templates:
+        if name in TASK_TEMPLATES:
             tasks.append(
                 Task(
-                    description=task_templates[name].format(task=task_description),
+                    description=TASK_TEMPLATES[name].format(task=task_description),
                     agent=agents[name],
-                    expected_output=expected_outputs[name],
+                    expected_output=EXPECTED_OUTPUTS[name],
                 )
             )
-
-    def _step_callback(step_output):
-        agent = getattr(step_output, "agent", None)
-        agent_name = getattr(agent, "role", "Agent") if agent else "Agent"
-        console.print(f"  [cyan]{agent_name}[/] completed a step")
 
     return Crew(
         agents=list(agents.values()),
         tasks=tasks,
         process=Process.sequential,
         verbose=False,
-        step_callback=_step_callback,
+        step_callback=make_step_callback(console),
     )
 
 
@@ -469,9 +304,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                         flat = False
                         console.print("[green]Switched to hierarchical mode[/]")
                     else:
-                        console.print(
-                            "[yellow]Usage: /mode flat  or  /mode hierarchical[/]"
-                        )
+                        console.print("[yellow]Usage: /mode flat  or  /mode hierarchical[/]")
                     continue
 
                 elif cmd == "/use":
@@ -482,9 +315,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                         parsed = _parse_agents(cmd_arg)
                         if parsed:
                             agent_names = parsed
-                            console.print(
-                                f"[green]Using agents: {', '.join(agent_names)}[/]"
-                            )
+                            console.print(f"[green]Using agents: {', '.join(agent_names)}[/]")
                     continue
 
                 elif cmd == "/history":
@@ -492,9 +323,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                         console.print("[dim]No tasks yet.[/]")
                     else:
                         for i, entry in enumerate(history, 1):
-                            status = (
-                                "[green]OK[/]" if entry["success"] else "[red]FAILED[/]"
-                            )
+                            status = "[green]OK[/]" if entry["success"] else "[red]FAILED[/]"
                             console.print(
                                 f"  {i}. [{entry['time']}] {status} "
                                 f"[dim]({entry['mode']})[/] {entry['task']}"
@@ -507,7 +336,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                     elif not cmd_arg:
                         console.print("[yellow]Usage: /save <filename>[/]")
                     else:
-                        save_path = Path(cmd_arg)
+                        save_path = _validate_output_path(cmd_arg)
                         save_path.parent.mkdir(parents=True, exist_ok=True)
                         save_path.write_text(str(last_result), encoding="utf-8")
                         console.print(f"[green]Saved to {save_path}[/]")
@@ -519,9 +348,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
 
             # Execute task
             mode_str = "flat" if flat else "hierarchical"
-            current_agents = (
-                ", ".join(agent_names) if agent_names else "all specialists"
-            )
+            current_agents = ", ".join(agent_names) if agent_names else "all specialists"
             console.print()
             console.print(f"[dim]Running ({mode_str}, {current_agents})...[/]")
             console.print()
@@ -602,6 +429,7 @@ def cli(ctx, ollama_url: str, flat: bool, agents: str | None):
     ctx.ensure_object(dict)
     ctx.obj["ollama_url"] = ollama_url
     if ctx.invoked_subcommand is None:
+        _validate_ollama_url(ollama_url)
         agent_names = _parse_agents(agents)
         _run_interactive(ollama_url, flat=flat, agent_names=agent_names)
 
@@ -628,10 +456,9 @@ def cli(ctx, ollama_url: str, flat: bool, agents: str | None):
     type=click.Path(),
     help="Save result to file",
 )
-def run_task(
-    task: str, flat: bool, agents: str | None, ollama_url: str, output: str | None
-):
+def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output: str | None):
     """Execute a development task with the agent swarm."""
+    _validate_ollama_url(ollama_url)
     _check_crewai()
 
     # Disable CrewAI tracing in non-interactive mode
@@ -672,7 +499,7 @@ def run_task(
         )
 
         if output:
-            output_path = Path(output)
+            output_path = _validate_output_path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(str(result), encoding="utf-8")
             console.print(f"\nResult saved to [cyan]{output_path}[/]")
@@ -711,6 +538,8 @@ def setup_models(ollama_url: str, models: str | None):
     import urllib.error
     import urllib.request
 
+    _validate_ollama_url(ollama_url)
+
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
@@ -734,19 +563,13 @@ def setup_models(ollama_url: str, models: str | None):
     # Filter models if specified
     if models:
         requested = {m.strip() for m in models.split(",")}
-        download_map = {
-            k: v for k, v in HF_MODELS.items() if v in requested
-        }
+        download_map = {k: v for k, v in HF_MODELS.items() if v in requested}
         if not download_map:
             console.print(f"[red]No matching models found for: {models}[/]")
             console.print(f"Available: {', '.join(HF_MODELS.values())}")
             sys.exit(1)
     else:
         download_map = HF_MODELS
-
-    # Find modelfiles directory (relative to package)
-    package_dir = Path(__file__).parent.parent.parent
-    modelfiles_dir = package_dir / "modelfiles"
 
     console.print()
     console.print(f"[bold]Downloading {len(download_map)} models from {HF_REPO}[/]")
@@ -768,22 +591,13 @@ def setup_models(ollama_url: str, models: str | None):
 
             # Determine system prompt and params based on agent type
             is_orchestrator = ollama_name == "orchestrator"
-            system_prompts = {
-                "orchestrator": "You are a Senior Software Architect and Project Manager. Plan development tasks, design system architecture, delegate work to specialists, and review code quality. Think step by step before delegating.",
-                "frontend": "You are a Frontend Developer specializing in React, TypeScript, and Tailwind CSS. Write clean, concise code without over-engineering.",
-                "backend": "You are a Backend Developer specializing in FastAPI, PostgreSQL, and async patterns. Focus on clean architecture without premature optimization.",
-                "test": "You are a QA Engineer specializing in pytest, coverage analysis, and edge case testing. Proactively write comprehensive tests for all code.",
-                "security": "You are a Security Engineer specializing in vulnerability assessment, OWASP Top 10, and secure coding patterns. Identify security issues aggressively and recommend hardened implementations.",
-                "docs": "You are a Technical Writer specializing in API documentation, README files, and developer guides. Write clear, concise documentation without unnecessary jargon.",
-                "devops": "You are a DevOps Engineer specializing in Docker, CI/CD pipelines, and infrastructure as code. Write practical deployment configurations without overengineering.",
-            }
-
+            system_prompt = AGENT_CONFIGS[ollama_name]["system_prompt"]
             num_predict = "4096" if is_orchestrator else "2048"
 
             # Create a temporary Modelfile pointing to the downloaded GGUF
             modelfile_content = (
                 f"FROM {gguf_path}\n\n"
-                f"SYSTEM {system_prompts.get(ollama_name, '')}\n\n"
+                f"SYSTEM {system_prompt}\n\n"
                 f"PARAMETER temperature 0.7\n"
                 f"PARAMETER top_p 0.9\n"
                 f"PARAMETER top_k 40\n"
@@ -844,9 +658,7 @@ def list_agents():
     console.print(table)
     console.print()
     console.print("[dim]Specialists (flat mode):[/]", ", ".join(SPECIALISTS))
-    console.print(
-        "[dim]Hierarchical mode uses orchestrator as manager + specialists[/]"
-    )
+    console.print("[dim]Hierarchical mode uses orchestrator as manager + specialists[/]")
 
 
 @cli.command("status")
@@ -860,6 +672,8 @@ def check_status(ollama_url: str):
     """Check Ollama connectivity and loaded models."""
     import urllib.error
     import urllib.request
+
+    _validate_ollama_url(ollama_url)
 
     console.print()
     console.print(f"Checking Ollama at [cyan]{ollama_url}[/]...")
@@ -924,9 +738,7 @@ def check_status(ollama_url: str):
         console.print(f"[dim]Missing: {', '.join(missing)}[/]")
         if available < total:
             console.print()
-            console.print(
-                "Run [cyan]bruno-swarm setup[/] to download and install missing models."
-            )
+            console.print("Run [cyan]bruno-swarm setup[/] to download and install missing models.")
 
     # Show loaded models (currently in memory)
     try:
