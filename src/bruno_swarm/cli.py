@@ -6,6 +6,7 @@
 
 import os
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -111,10 +112,38 @@ def create_agent(name: str, base_url: str):
     )
 
 
+def _get_or_create_agent(name: str, base_url: str, cache: dict):
+    """Return a cached Agent or create and cache a new one. Key: (name, base_url)."""
+    key = (name, base_url)
+    if key not in cache:
+        cache[key] = create_agent(name, base_url)
+    return cache[key]
+
+
+def _prewarm_model(model_name: str, base_url: str):
+    """Best-effort: send minimal /api/generate to preload model into Ollama memory."""
+    import json
+    import urllib.request
+
+    try:
+        payload = json.dumps({"model": model_name, "prompt": ".", "stream": False}).encode()
+        req = urllib.request.Request(
+            f"{base_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120):
+            pass
+    except Exception:
+        pass  # Pre-warming is best-effort
+
+
 def create_hierarchical_crew(
     task_description: str,
     base_url: str,
     agent_names: list[str] | None = None,
+    agent_cache: dict | None = None,
 ):
     """Create a hierarchical crew using sequential process.
 
@@ -128,10 +157,15 @@ def create_hierarchical_crew(
         agent_names = SPECIALISTS
 
     # Create all agents including orchestrator
-    orchestrator = create_agent("orchestrator", base_url)
+    _make = (
+        (lambda n, u: _get_or_create_agent(n, u, agent_cache))
+        if agent_cache is not None
+        else create_agent
+    )
+    orchestrator = _make("orchestrator", base_url)
     agents = {"orchestrator": orchestrator}
     for name in agent_names:
-        agents[name] = create_agent(name, base_url)
+        agents[name] = _make(name, base_url)
 
     tasks = []
 
@@ -187,6 +221,7 @@ def create_flat_crew(
     task_description: str,
     base_url: str,
     agent_names: list[str] | None = None,
+    agent_cache: dict | None = None,
 ):
     """Create a flat sequential crew without orchestrator.
 
@@ -197,9 +232,14 @@ def create_flat_crew(
     if agent_names is None:
         agent_names = SPECIALISTS
 
+    _make = (
+        (lambda n, u: _get_or_create_agent(n, u, agent_cache))
+        if agent_cache is not None
+        else create_agent
+    )
     agents = {}
     for name in agent_names:
-        agents[name] = create_agent(name, base_url)
+        agents[name] = _make(name, base_url)
 
     tasks = []
     for name in agent_names:
@@ -239,6 +279,7 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
     mode = "flat" if flat else "hierarchical"
     agents_str = ", ".join(agent_names) if agent_names else "all specialists"
     history: list[dict] = []
+    agent_cache: dict = {}  # (name, base_url) -> Agent
 
     # Welcome banner
     console.print()
@@ -355,9 +396,20 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
 
             try:
                 if flat:
-                    crew = create_flat_crew(task_input, ollama_url, agent_names)
+                    crew = create_flat_crew(
+                        task_input, ollama_url, agent_names, agent_cache=agent_cache
+                    )
+                    first_model = (agent_names or SPECIALISTS)[0]
                 else:
-                    crew = create_hierarchical_crew(task_input, ollama_url, agent_names)
+                    crew = create_hierarchical_crew(
+                        task_input, ollama_url, agent_names, agent_cache=agent_cache
+                    )
+                    first_model = "orchestrator"
+
+                # Pre-warm first model in background while crew starts
+                threading.Thread(
+                    target=_prewarm_model, args=(first_model, ollama_url), daemon=True
+                ).start()
 
                 result = crew.kickoff()
                 last_result = result
@@ -484,8 +536,13 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
     try:
         if flat:
             crew = create_flat_crew(task, ollama_url, agent_names)
+            first_model = (agent_names or SPECIALISTS)[0]
         else:
             crew = create_hierarchical_crew(task, ollama_url, agent_names)
+            first_model = "orchestrator"
+
+        # Pre-warm first model in background while crew starts
+        threading.Thread(target=_prewarm_model, args=(first_model, ollama_url), daemon=True).start()
 
         result = crew.kickoff()
 
@@ -511,6 +568,21 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
         logger.error("Swarm execution failed", exc_info=True)
         console.print(f"\n[red]Swarm failed: {type(e).__name__}: {e}[/]")
         sys.exit(1)
+
+
+def _download_model(filename, ollama_name, hf_hub_download, console, console_lock):
+    """Download a single GGUF from HuggingFace. Returns (ollama_name, gguf_path | None)."""
+    with console_lock:
+        console.print(f"  [cyan]{ollama_name}[/] -- downloading {filename}...")
+    try:
+        gguf_path = hf_hub_download(repo_id=HF_REPO, filename=filename)
+        with console_lock:
+            console.print(f"  [green]{ollama_name}[/] -- download complete")
+        return (ollama_name, gguf_path)
+    except Exception as e:
+        with console_lock:
+            console.print(f"  [red]{ollama_name}[/] -- download failed: {e}")
+        return (ollama_name, None)
 
 
 @cli.command("setup")
@@ -575,26 +647,38 @@ def setup_models(ollama_url: str, models: str | None):
     console.print(f"[bold]Downloading {len(download_map)} models from {HF_REPO}[/]")
     console.print()
 
+    # Report skipped models
     for filename, ollama_name in download_map.items():
         if ollama_name in existing_models:
             console.print(f"  [dim]{ollama_name}[/] -- already in Ollama, skipping")
-            continue
 
-        console.print(f"  [cyan]{ollama_name}[/] -- downloading {filename}...")
+    to_download = {fn: name for fn, name in download_map.items() if name not in existing_models}
 
+    # Phase 1: Parallel downloads from HuggingFace
+    downloaded: dict[str, str] = {}  # ollama_name -> gguf_path
+    if to_download:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        console_lock = threading.Lock()
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(
+                    _download_model, fn, name, hf_hub_download, console, console_lock
+                ): name
+                for fn, name in to_download.items()
+            }
+            for future in as_completed(futures):
+                ollama_name, gguf_path = future.result()
+                if gguf_path:
+                    downloaded[ollama_name] = gguf_path
+
+    # Phase 2: Sequential Ollama imports (Ollama DB is single-writer)
+    for ollama_name, gguf_path in downloaded.items():
         try:
-            # Download GGUF from HuggingFace
-            gguf_path = hf_hub_download(
-                repo_id=HF_REPO,
-                filename=filename,
-            )
-
-            # Determine system prompt and params based on agent type
             is_orchestrator = ollama_name == "orchestrator"
             system_prompt = AGENT_CONFIGS[ollama_name]["system_prompt"]
             num_predict = "4096" if is_orchestrator else "2048"
 
-            # Create a temporary Modelfile pointing to the downloaded GGUF
             modelfile_content = (
                 f"FROM {gguf_path}\n\n"
                 f"SYSTEM {system_prompt}\n\n"
@@ -612,7 +696,6 @@ def setup_models(ollama_url: str, models: str | None):
                 temp_modelfile = f.name
 
             try:
-                # Import into Ollama
                 console.print(f"  [cyan]{ollama_name}[/] -- importing into Ollama...")
                 result = subprocess.run(
                     ["ollama", "create", ollama_name, "-f", temp_modelfile],
@@ -631,7 +714,7 @@ def setup_models(ollama_url: str, models: str | None):
                 Path(temp_modelfile).unlink(missing_ok=True)
 
         except Exception as e:
-            console.print(f"  [red]{ollama_name}[/] -- failed: {e}")
+            console.print(f"  [red]{ollama_name}[/] -- import failed: {e}")
 
     console.print()
     console.print("[green]Setup complete.[/] Run [cyan]bruno-swarm status[/] to verify.")
