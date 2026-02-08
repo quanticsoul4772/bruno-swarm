@@ -105,6 +105,30 @@ export OLLAMA_MAX_LOADED_MODELS=3
 export OLLAMA_KEEP_ALIVE=30m
 ```
 
+## Docker Deployment (GPU Cloud)
+
+Pre-built Docker image with all 7 agent models baked into Ollama. Deploy on RunPod, Vast.ai, or any GPU cloud.
+
+### Build & Run
+
+```bash
+docker build -f deploy/Dockerfile.ollama -t bruno-swarm-ollama .
+docker run --gpus all -p 11434:11434 bruno-swarm-ollama
+```
+
+### Connect from bruno-swarm
+
+```bash
+bruno-swarm tui -u http://<host>:11434
+bruno-swarm run --task "Build a REST API" --ollama-url http://<host>:11434
+```
+
+### Cloud Providers
+
+- **RunPod**: Use as custom Docker image, expose port 11434, select 48+ GB VRAM GPU
+- **Vast.ai**: Deploy with `ollama/ollama` template or custom image, map port 11434
+- **Modal**: Use `modal.Image.from_dockerhub("quanticsoul4772/bruno-swarm-ollama")`
+
 ## Known Issues
 
 - 3B models can be repetitive -- `num_predict 2048` in Modelfiles caps output length

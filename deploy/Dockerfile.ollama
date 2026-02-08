@@ -1,0 +1,66 @@
+# Bruno Swarm — All 7 agent models pre-baked into Ollama
+#
+# Three-stage build:
+#   1. downloader — Python slim, downloads GGUFs from HuggingFace
+#   2. builder    — Ollama, imports models via `ollama create`
+#   3. runtime    — Clean Ollama image with only /root/.ollama blobs
+#
+# Build:  docker build -f deploy/Dockerfile.ollama -t bruno-swarm-ollama .
+# Run:    docker run --gpus all -p 11434:11434 bruno-swarm-ollama
+
+# ===== Stage 1: Download GGUFs and generate Modelfiles =====
+FROM python:3.12-slim AS downloader
+
+RUN pip install --no-cache-dir huggingface-hub
+
+COPY deploy/download-and-prepare.py /app/download-and-prepare.py
+
+RUN python /app/download-and-prepare.py
+
+# ===== Stage 2: Import models into Ollama =====
+FROM ollama/ollama AS builder
+
+COPY --from=downloader /tmp/models /tmp/models
+COPY --from=downloader /tmp/modelfiles /tmp/modelfiles
+
+RUN ollama serve & \
+    SERVER_PID=$! && \
+    for i in $(seq 1 30); do \
+        curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; \
+        sleep 1; \
+    done && \
+    echo "=== Creating models ===" && \
+    ollama create orchestrator -f /tmp/modelfiles/Modelfile.orchestrator && \
+    ollama create frontend -f /tmp/modelfiles/Modelfile.frontend && \
+    ollama create backend -f /tmp/modelfiles/Modelfile.backend && \
+    ollama create test -f /tmp/modelfiles/Modelfile.test && \
+    ollama create security -f /tmp/modelfiles/Modelfile.security && \
+    ollama create docs -f /tmp/modelfiles/Modelfile.docs && \
+    ollama create devops -f /tmp/modelfiles/Modelfile.devops && \
+    echo "=== Models created ===" && \
+    ollama list && \
+    kill $SERVER_PID && \
+    wait $SERVER_PID 2>/dev/null; \
+    rm -rf /tmp/models /tmp/modelfiles
+
+# ===== Stage 3: Clean runtime image =====
+FROM ollama/ollama AS runtime
+
+LABEL org.opencontainers.image.title="Bruno Swarm Ollama" \
+      org.opencontainers.image.description="7 specialized coding agents (1x 14B orchestrator + 6x 3B specialists) pre-loaded in Ollama" \
+      org.opencontainers.image.source="https://github.com/quanticsoul4772/bruno-swarm" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
+COPY --from=builder /root/.ollama /root/.ollama
+
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
+
+ENV OLLAMA_HOST=0.0.0.0
+ENV OLLAMA_MAX_LOADED_MODELS=3
+ENV OLLAMA_KEEP_ALIVE=30m
+
+EXPOSE 11434
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["serve"]
