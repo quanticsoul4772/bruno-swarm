@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for bruno_swarm.config — shared constants and helpers."""
 
+from unittest.mock import MagicMock
+
 from bruno_swarm.config import (
     AGENT_CONFIGS,
     DEFAULT_OLLAMA_URL,
@@ -122,15 +124,11 @@ class TestDefaultOllamaUrl:
 
 class TestMakeStepCallback:
     def test_returns_callable(self):
-        from unittest.mock import MagicMock
-
         console = MagicMock()
         cb = make_step_callback(console)
         assert callable(cb)
 
     def test_callback_calls_console_print(self):
-        from unittest.mock import MagicMock
-
         console = MagicMock()
         cb = make_step_callback(console)
 
@@ -144,8 +142,6 @@ class TestMakeStepCallback:
         assert "Backend Developer" in printed
 
     def test_callback_handles_missing_agent(self):
-        from unittest.mock import MagicMock
-
         console = MagicMock()
         cb = make_step_callback(console)
 

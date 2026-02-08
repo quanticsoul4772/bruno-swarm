@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 console = Console()
 
 
-def _check_crewai():
+def _check_crewai() -> bool:
     """Check that CrewAI is installed, exit with install instructions if not."""
     try:
         import crewai  # noqa: F401
@@ -83,6 +83,26 @@ def _validate_ollama_url(url: str) -> str:
     return url
 
 
+def _ollama_api_get(ollama_url: str, endpoint: str) -> dict:
+    """GET an Ollama API endpoint and return parsed JSON, or exit on failure."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(f"{ollama_url}{endpoint}", method="GET")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", e)
+        console.print(f"[red]Cannot connect to Ollama: {reason}[/]")
+        console.print("Make sure Ollama is running: [cyan]ollama serve[/]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error connecting to Ollama: {e}[/]")
+        sys.exit(1)
+
+
 def create_llm(model_name: str, base_url: str):
     """Create a CrewAI LLM instance for an Ollama model."""
     from crewai import LLM
@@ -120,7 +140,7 @@ def _get_or_create_agent(name: str, base_url: str, cache: dict):
     return cache[key]
 
 
-def _prewarm_model(model_name: str, base_url: str):
+def _prewarm_model(model_name: str, base_url: str) -> None:
     """Best-effort: send minimal /api/generate to preload model into Ollama memory."""
     import json
     import urllib.request
@@ -261,7 +281,7 @@ def create_flat_crew(
     )
 
 
-def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None):
+def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None) -> None:
     """Interactive TUI mode -- like Claude Code.
 
     Presents a prompt loop where the user types tasks and sees results.
@@ -570,7 +590,9 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
         sys.exit(1)
 
 
-def _download_model(filename, ollama_name, hf_hub_download, console, console_lock):
+def _download_model(
+    filename, ollama_name, hf_hub_download, console, console_lock
+) -> tuple[str, str | None]:
     """Download a single GGUF from HuggingFace. Returns (ollama_name, gguf_path | None)."""
     with console_lock:
         console.print(f"  [cyan]{ollama_name}[/] -- downloading {filename}...")
@@ -604,11 +626,8 @@ def setup_models(ollama_url: str, models: str | None):
     Downloads pre-built GGUF models from rawcell/bruno-swarm-models
     and creates Ollama models using the bundled Modelfiles.
     """
-    import json
     import subprocess
     import tempfile
-    import urllib.error
-    import urllib.request
 
     _validate_ollama_url(ollama_url)
 
@@ -621,14 +640,7 @@ def setup_models(ollama_url: str, models: str | None):
 
     # Check Ollama connectivity
     console.print(f"Checking Ollama at [cyan]{ollama_url}[/]...")
-    try:
-        req = urllib.request.Request(f"{ollama_url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, Exception) as e:
-        console.print(f"[red]Cannot connect to Ollama: {e}[/]")
-        console.print("Make sure Ollama is running: [cyan]ollama serve[/]")
-        sys.exit(1)
+    data = _ollama_api_get(ollama_url, "/api/tags")
 
     existing_models = {m.get("name", "").split(":")[0] for m in data.get("models", [])}
 
@@ -753,7 +765,7 @@ def list_agents():
 )
 def check_status(ollama_url: str):
     """Check Ollama connectivity and loaded models."""
-    import urllib.error
+    import json
     import urllib.request
 
     _validate_ollama_url(ollama_url)
@@ -762,23 +774,7 @@ def check_status(ollama_url: str):
     console.print(f"Checking Ollama at [cyan]{ollama_url}[/]...")
     console.print()
 
-    # Check Ollama connectivity
-    try:
-        req = urllib.request.Request(f"{ollama_url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            import json
-
-            data = json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
-        console.print(f"[red]Cannot connect to Ollama: {e.reason}[/]")
-        console.print()
-        console.print("Make sure Ollama is running:")
-        console.print("  [cyan]ollama serve[/]")
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Error connecting to Ollama: {e}[/]")
-        sys.exit(1)
-
+    data = _ollama_api_get(ollama_url, "/api/tags")
     console.print("[green]Ollama is running[/]")
     console.print()
 
@@ -827,8 +823,6 @@ def check_status(ollama_url: str):
     try:
         req = urllib.request.Request(f"{ollama_url}/api/ps", method="GET")
         with urllib.request.urlopen(req, timeout=10) as resp:
-            import json
-
             ps_data = json.loads(resp.read().decode())
             running = ps_data.get("models", [])
             if running:
@@ -843,7 +837,7 @@ def check_status(ollama_url: str):
         pass  # /api/ps may not be available in older Ollama versions
 
 
-def main():
+def main() -> None:
     """Entry point for the CLI."""
     cli()
 

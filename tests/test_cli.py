@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for bruno_swarm.cli — helper functions and Click command smoke tests."""
 
+import sys
+import threading
+import unittest.mock
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
@@ -139,8 +143,6 @@ class TestAgentsCommand:
 
 class TestDownloadModel:
     def test_success_returns_path(self, mock_console):
-        import threading
-
         fake_hf = lambda repo_id, filename: "/tmp/model.gguf"  # noqa: E731
         lock = threading.Lock()
         name, path = _download_model("backend-3b-f16.gguf", "backend", fake_hf, mock_console, lock)
@@ -148,8 +150,6 @@ class TestDownloadModel:
         assert path == "/tmp/model.gguf"
 
     def test_failure_returns_none(self, mock_console):
-        import threading
-
         def _raise(**kwargs):
             raise RuntimeError("network error")
 
@@ -216,8 +216,6 @@ class TestPrewarmModel:
 
 class TestGetOrCreateAgent:
     def test_caches_agent(self, mock_console, monkeypatch):
-        import sys
-
         cli_mod = sys.modules["bruno_swarm.cli"]
         call_count = 0
         sentinel = object()
@@ -238,8 +236,6 @@ class TestGetOrCreateAgent:
         assert call_count == 1
 
     def test_different_names_create_separate(self, mock_console, monkeypatch):
-        import sys
-
         cli_mod = sys.modules["bruno_swarm.cli"]
         created = []
 
@@ -258,12 +254,7 @@ class TestGetOrCreateAgent:
 
 class TestCrewWithAgentCache:
     def test_flat_crew_uses_cache(self, mock_console, monkeypatch):
-        import sys
-
         cli_mod = sys.modules["bruno_swarm.cli"]
-
-        # Mock crewai classes
-        from unittest.mock import MagicMock
 
         fake_crew_cls = MagicMock()
         fake_task_cls = MagicMock()
@@ -286,9 +277,6 @@ class TestCrewWithAgentCache:
             return original_create(name, base_url)
 
         monkeypatch.setattr(cli_mod, "create_agent", spy_create)
-
-        # Patch crewai imports inside create_flat_crew
-        import unittest.mock
 
         with unittest.mock.patch.dict(
             "sys.modules",

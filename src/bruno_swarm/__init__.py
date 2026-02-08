@@ -7,4 +7,4 @@ __version__ = "0.1.0"
 from .cli import cli, main
 from .logging import get_logger
 
-__all__ = ["cli", "main", "get_logger", "__version__"]
+__all__ = ["__version__", "cli", "get_logger", "main"]
