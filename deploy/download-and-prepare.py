@@ -97,7 +97,6 @@ def main() -> None:
             repo_id=HF_REPO,
             filename=filename,
             local_dir=str(MODELS_DIR),
-            local_dir_use_symlinks=False,
         )
         # hf_hub_download may place the file in a subdirectory; move to flat layout
         dest_path = Path(dest)

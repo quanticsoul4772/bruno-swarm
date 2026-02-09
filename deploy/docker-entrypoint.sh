@@ -20,7 +20,7 @@ OLLAMA_PID=$!
 
 # Wait for Ollama to be ready (up to 30s)
 for i in $(seq 1 30); do
-    if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+    if ollama list >/dev/null 2>&1; then
         echo "[ready] Ollama is up (${i}s)"
         break
     fi

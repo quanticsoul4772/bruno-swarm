@@ -59,10 +59,11 @@ There are no tests yet. The project has no test suite.
 
 ### Docker Deployment (`deploy/`)
 
-- **`Dockerfile.ollama`** — Three-stage build: Python slim downloader → Ollama builder → clean runtime
+- **`Dockerfile.ollama`** — Two-stage build: Ollama + Python downloader/builder → clean runtime
 - **`download-and-prepare.py`** — Downloads GGUFs from HF + generates Modelfiles (mirrors AGENT_CONFIGS)
 - **`docker-entrypoint.sh`** — GPU detection, model health check, graceful shutdown
 - **`docker-compose.yml`** — GPU-enabled Compose with health checks
+- **`.github/workflows/docker-build.yml`** — CI: builds and pushes image to Docker Hub on version tags or deploy/ changes
 
 ### Examples (`examples/`)
 

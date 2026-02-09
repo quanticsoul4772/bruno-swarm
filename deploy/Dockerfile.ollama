@@ -1,32 +1,31 @@
 # Bruno Swarm — All 7 agent models pre-baked into Ollama
 #
-# Three-stage build:
-#   1. downloader — Python slim, downloads GGUFs from HuggingFace
-#   2. builder    — Ollama, imports models via `ollama create`
-#   3. runtime    — Clean Ollama image with only /root/.ollama blobs
+# Two-stage build:
+#   1. builder  — Ollama + Python: downloads GGUFs, imports into Ollama, cleans up
+#   2. runtime  — Clean Ollama image with only /root/.ollama blobs
 #
 # Build:  docker build -f deploy/Dockerfile.ollama -t bruno-swarm-ollama .
 # Run:    docker run --gpus all -p 11434:11434 bruno-swarm-ollama
 
-# ===== Stage 1: Download GGUFs and generate Modelfiles =====
-FROM python:3.12-slim AS downloader
+# ===== Stage 1: Download GGUFs and import into Ollama =====
+FROM ollama/ollama AS builder
 
-RUN pip install --no-cache-dir huggingface-hub
+# Install Python + huggingface-hub (temporary, not in final image)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 python3-pip && \
+    pip3 install --no-cache-dir --break-system-packages huggingface-hub && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY deploy/download-and-prepare.py /app/download-and-prepare.py
 
-RUN python /app/download-and-prepare.py
+# Download models and generate Modelfiles
+RUN python3 /app/download-and-prepare.py
 
-# ===== Stage 2: Import models into Ollama =====
-FROM ollama/ollama AS builder
-
-COPY --from=downloader /tmp/models /tmp/models
-COPY --from=downloader /tmp/modelfiles /tmp/modelfiles
-
-RUN ollama serve & \
-    SERVER_PID=$! && \
+# Import models into Ollama, then clean up
+RUN bash -c 'ollama serve & SERVER_PID=$! && \
     for i in $(seq 1 30); do \
-        curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && break; \
+        ollama list >/dev/null 2>&1 && break; \
+        if [ "$i" -eq 30 ]; then echo "ERROR: Ollama failed to start"; exit 1; fi; \
         sleep 1; \
     done && \
     echo "=== Creating models ===" && \
@@ -40,10 +39,13 @@ RUN ollama serve & \
     echo "=== Models created ===" && \
     ollama list && \
     kill $SERVER_PID && \
-    wait $SERVER_PID 2>/dev/null; \
-    rm -rf /tmp/models /tmp/modelfiles
+    wait $SERVER_PID 2>/dev/null' && \
+    rm -rf /tmp/models /tmp/modelfiles /app && \
+    apt-get purge -y python3 python3-pip && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
-# ===== Stage 3: Clean runtime image =====
+# ===== Stage 2: Clean runtime image =====
 FROM ollama/ollama AS runtime
 
 LABEL org.opencontainers.image.title="Bruno Swarm Ollama" \

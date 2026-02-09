@@ -109,12 +109,23 @@ export OLLAMA_KEEP_ALIVE=30m
 
 Pre-built Docker image with all 7 agent models baked into Ollama. Deploy on RunPod, Vast.ai, or any GPU cloud.
 
-### Build & Run
+### Pre-built Image
+
+```bash
+docker pull quanticsoul4772/bruno-swarm-ollama:latest
+docker run --gpus all -p 11434:11434 quanticsoul4772/bruno-swarm-ollama
+```
+
+### Build from Source
+
+Requires ~100 GB free disk (downloads ~40 GB of models during build):
 
 ```bash
 docker build -f deploy/Dockerfile.ollama -t bruno-swarm-ollama .
 docker run --gpus all -p 11434:11434 bruno-swarm-ollama
 ```
+
+The image is also built automatically via GitHub Actions on version tags or changes to `deploy/`.
 
 ### Connect from bruno-swarm
 
