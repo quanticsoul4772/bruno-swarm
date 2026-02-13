@@ -54,10 +54,11 @@ bruno-swarm
 
 ### Hierarchical (default)
 
-The 14B orchestrator plans the architecture, delegates to 3B specialists, then reviews and integrates all work.
+The 14B orchestrator plans the architecture, delegates to 3B specialists, then reviews and integrates all work. The orchestrator can read/write files and execute shell commands to apply code changes directly to disk.
 
 ```bash
 bruno-swarm run --task "Build user auth"
+bruno-swarm run --task "Build user auth" --no-tools  # disable file/shell tools
 ```
 
 ### Flat

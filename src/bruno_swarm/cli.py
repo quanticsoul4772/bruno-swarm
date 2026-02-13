@@ -115,8 +115,8 @@ def create_llm(model_name: str, base_url: str):
     )
 
 
-def create_agent(name: str, base_url: str):
-    """Create a CrewAI agent from config."""
+def create_agent(name: str, base_url: str, tools: list | None = None):
+    """Create a CrewAI agent from config, optionally with tools."""
     from crewai import Agent
 
     config = AGENT_CONFIGS[name]
@@ -129,14 +129,20 @@ def create_agent(name: str, base_url: str):
         allow_delegation=config["allow_delegation"],
         max_iter=10,
         max_retry_limit=3,
+        tools=tools or [],
     )
 
 
-def _get_or_create_agent(name: str, base_url: str, cache: dict):
-    """Return a cached Agent or create and cache a new one. Key: (name, base_url)."""
-    key = (name, base_url)
+def _get_or_create_agent(name: str, base_url: str, cache: dict, tools: list | None = None):
+    """Return a cached Agent or create and cache a new one.
+
+    Cache key includes the tool types so an orchestrator with tools and one
+    without are stored separately.
+    """
+    tools_id = tuple(type(t).__name__ for t in tools) if tools else ()
+    key = (name, base_url, tools_id)
     if key not in cache:
-        cache[key] = create_agent(name, base_url)
+        cache[key] = create_agent(name, base_url, tools)
     return cache[key]
 
 
@@ -165,25 +171,39 @@ def create_hierarchical_crew(
     agent_names: list[str] | None = None,
     agent_cache: dict | None = None,
     step_callback=None,
+    enable_tools: bool = True,
 ):
     """Create a hierarchical crew using sequential process.
 
     CrewAI's Process.hierarchical is broken (manager doesn't properly
     route tasks). Instead, use sequential with the orchestrator as
     first and last agent: plan -> specialists -> review.
+
+    When *enable_tools* is True the orchestrator gets filesystem and shell
+    tools (read/write files, execute commands, list directories).  Specialist
+    agents never receive tools — 3B models can't do tool calling reliably.
     """
     from crewai import Crew, Process, Task
 
     if agent_names is None:
         agent_names = SPECIALISTS
 
-    # Create all agents including orchestrator
-    _make = (
-        (lambda n, u: _get_or_create_agent(n, u, agent_cache))
-        if agent_cache is not None
-        else create_agent
-    )
-    orchestrator = _make("orchestrator", base_url)
+    # Optionally create tools for the orchestrator
+    orchestrator_tools = None
+    if enable_tools:
+        from .tools import create_orchestrator_tools
+
+        orchestrator_tools = create_orchestrator_tools()
+
+    # Create all agents — orchestrator with tools, specialists without
+    if agent_cache is not None:
+
+        def _make(n, u, t=None):
+            return _get_or_create_agent(n, u, agent_cache, t)
+    else:
+        _make = create_agent
+
+    orchestrator = _make("orchestrator", base_url, orchestrator_tools)
     agents = {"orchestrator": orchestrator}
     for name in agent_names:
         agents[name] = _make(name, base_url)
@@ -191,14 +211,21 @@ def create_hierarchical_crew(
     tasks = []
 
     # Task 1: Orchestrator plans the architecture
+    plan_description = f"Plan the architecture for: {task_description}\n\n"
+    if enable_tools:
+        plan_description += (
+            "You have tools available. Use list_directory (non-recursive) to quickly "
+            "check the current directory, then plan. Do NOT recursively list or read "
+            "files unless directly relevant to the task. Be efficient.\n\n"
+        )
+    plan_description += (
+        "Break this into components and define the technical approach "
+        "for each part. Output a clear plan with file structure, "
+        "technology choices, and implementation order."
+    )
     tasks.append(
         Task(
-            description=(
-                f"Plan the architecture for: {task_description}\n\n"
-                "Break this into components and define the technical approach "
-                "for each part. Output a clear plan with file structure, "
-                "technology choices, and implementation order."
-            ),
+            description=plan_description,
             agent=orchestrator,
             expected_output="Architecture plan with components and implementation order",
         )
@@ -216,14 +243,21 @@ def create_hierarchical_crew(
             )
 
     # Final task: Orchestrator reviews and integrates
+    review_description = (
+        f"Review all the work produced by the team for: {task_description}\n\n"
+        "Integrate all components into a cohesive implementation. "
+        "Identify any gaps, inconsistencies, or issues. "
+    )
+    if enable_tools:
+        review_description += (
+            "IMPORTANT: Use write_file to save each code file to disk now. "
+            "Then use execute_shell to run the code and verify it works. "
+            "Do not just describe the code — actually write the files. "
+        )
+    review_description += "Output the complete integrated implementation."
     tasks.append(
         Task(
-            description=(
-                f"Review all the work produced by the team for: {task_description}\n\n"
-                "Integrate all components into a cohesive implementation. "
-                "Identify any gaps, inconsistencies, or issues. "
-                "Output the complete integrated implementation."
-            ),
+            description=review_description,
             agent=orchestrator,
             expected_output="Complete integrated implementation with all components",
         )
@@ -283,7 +317,9 @@ def create_flat_crew(
     )
 
 
-def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None) -> None:
+def _run_interactive(
+    ollama_url: str, flat: bool, agent_names: list[str] | None, enable_tools: bool = True
+) -> None:
     """Interactive TUI mode -- like Claude Code.
 
     Presents a prompt loop where the user types tasks and sees results.
@@ -300,8 +336,9 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
 
     mode = "flat" if flat else "hierarchical"
     agents_str = ", ".join(agent_names) if agent_names else "all specialists"
+    tools_str = "enabled" if enable_tools and not flat else "disabled"
     history: list[dict] = []
-    agent_cache: dict = {}  # (name, base_url) -> Agent
+    agent_cache: dict = {}  # (name, base_url, tools_id) -> Agent
 
     # Welcome banner
     console.print()
@@ -316,10 +353,12 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
             "  [cyan]/mode hierarchical[/] -- switch to hierarchical mode\n"
             "  [cyan]/use agent1,agent2[/] -- select specific agents\n"
             "  [cyan]/use all[/]         -- use all specialists\n"
+            "  [cyan]/tools on|off[/]    -- toggle orchestrator tools\n"
             "  [cyan]/history[/]         -- show task history\n"
             "  [cyan]/save <file>[/]     -- save last result to file\n"
             "  [cyan]/quit[/]            -- exit\n\n"
-            f"Mode: [cyan]{mode}[/]  |  Agents: [cyan]{agents_str}[/]  |  Ollama: [cyan]{ollama_url}[/]",
+            f"Mode: [cyan]{mode}[/]  |  Agents: [cyan]{agents_str}[/]  |  "
+            f"Tools: [cyan]{tools_str}[/]  |  Ollama: [cyan]{ollama_url}[/]",
             title="Swarm",
             border_style="cyan",
         )
@@ -393,6 +432,19 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                             )
                     continue
 
+                elif cmd == "/tools":
+                    if cmd_arg.lower() in ("on", "enable"):
+                        enable_tools = True
+                        console.print("[green]Tools enabled[/]")
+                    elif cmd_arg.lower() in ("off", "disable"):
+                        enable_tools = False
+                        console.print("[green]Tools disabled[/]")
+                    else:
+                        status = "enabled" if enable_tools and not flat else "disabled"
+                        console.print(f"[dim]Tools: {status}[/]")
+                        console.print("[dim]Usage: /tools on|off[/]")
+                    continue
+
                 elif cmd == "/save":
                     if not last_result:
                         console.print("[yellow]No result to save.[/]")
@@ -424,7 +476,11 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
                     first_model = (agent_names or SPECIALISTS)[0]
                 else:
                     crew = create_hierarchical_crew(
-                        task_input, ollama_url, agent_names, agent_cache=agent_cache
+                        task_input,
+                        ollama_url,
+                        agent_names,
+                        agent_cache=agent_cache,
+                        enable_tools=enable_tools,
                     )
                     first_model = "orchestrator"
 
@@ -491,8 +547,9 @@ def _run_interactive(ollama_url: str, flat: bool, agent_names: list[str] | None)
     default=None,
     help="Comma-separated agent names for interactive mode",
 )
+@click.option("--no-tools", is_flag=True, help="Disable orchestrator tools (shell, file I/O)")
 @click.pass_context
-def cli(ctx, ollama_url: str, flat: bool, agents: str | None):
+def cli(ctx, ollama_url: str, flat: bool, agents: str | None, no_tools: bool):
     """Bruno AI Developer Swarm CLI.
 
     Multi-agent development team powered by abliterated Bruno models.
@@ -505,7 +562,7 @@ def cli(ctx, ollama_url: str, flat: bool, agents: str | None):
     if ctx.invoked_subcommand is None:
         _validate_ollama_url(ollama_url)
         agent_names = _parse_agents(agents)
-        _run_interactive(ollama_url, flat=flat, agent_names=agent_names)
+        _run_interactive(ollama_url, flat=flat, agent_names=agent_names, enable_tools=not no_tools)
 
 
 @cli.command("run")
@@ -530,7 +587,15 @@ def cli(ctx, ollama_url: str, flat: bool, agents: str | None):
     type=click.Path(),
     help="Save result to file",
 )
-def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output: str | None):
+@click.option("--no-tools", is_flag=True, help="Disable orchestrator tools (shell, file I/O)")
+def run_task(
+    task: str,
+    flat: bool,
+    agents: str | None,
+    ollama_url: str,
+    output: str | None,
+    no_tools: bool,
+):
     """Execute a development task with the agent swarm."""
     _validate_ollama_url(ollama_url)
     _check_crewai()
@@ -540,7 +605,9 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
 
     agent_names = _parse_agents(agents)
     mode = "flat" if flat else "hierarchical"
+    enable_tools = not no_tools and not flat
     agents_str = ", ".join(agent_names) if agent_names else "all specialists"
+    tools_str = "enabled" if enable_tools else "disabled"
 
     console.print()
     console.print(
@@ -548,6 +615,7 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
             f"[bold]Bruno AI Developer Swarm[/]\n\n"
             f"Mode: [cyan]{mode}[/]\n"
             f"Agents: [cyan]{agents_str}[/]\n"
+            f"Tools: [cyan]{tools_str}[/]\n"
             f"Ollama: [cyan]{ollama_url}[/]\n"
             f"Task: [cyan]{task}[/]",
             title="Swarm",
@@ -560,7 +628,9 @@ def run_task(task: str, flat: bool, agents: str | None, ollama_url: str, output:
             crew = create_flat_crew(task, ollama_url, agent_names)
             first_model = (agent_names or SPECIALISTS)[0]
         else:
-            crew = create_hierarchical_crew(task, ollama_url, agent_names)
+            crew = create_hierarchical_crew(
+                task, ollama_url, agent_names, enable_tools=enable_tools
+            )
             first_model = "orchestrator"
 
         # Pre-warm first model in background while crew starts

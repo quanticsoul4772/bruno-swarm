@@ -220,7 +220,7 @@ class TestGetOrCreateAgent:
         call_count = 0
         sentinel = object()
 
-        def fake_create_agent(name, base_url):
+        def fake_create_agent(name, base_url, tools=None):
             nonlocal call_count
             call_count += 1
             return sentinel
@@ -239,7 +239,7 @@ class TestGetOrCreateAgent:
         cli_mod = sys.modules["bruno_swarm.cli"]
         created = []
 
-        def fake_create_agent(name, base_url):
+        def fake_create_agent(name, base_url, tools=None):
             created.append(name)
             return f"agent-{name}"
 
@@ -263,18 +263,18 @@ class TestCrewWithAgentCache:
 
         monkeypatch.setattr(cli_mod, "make_step_callback", lambda c: None)
 
-        # Pre-populate cache with two agents
+        # Pre-populate cache with two agents (3-tuple keys: name, url, tools_id)
         cache = {
-            ("backend", "http://localhost:11434"): MagicMock(name="cached-backend"),
-            ("frontend", "http://localhost:11434"): MagicMock(name="cached-frontend"),
+            ("backend", "http://localhost:11434", ()): MagicMock(name="cached-backend"),
+            ("frontend", "http://localhost:11434", ()): MagicMock(name="cached-frontend"),
         }
 
         create_agent_calls = []
         original_create = cli_mod.create_agent
 
-        def spy_create(name, base_url):
+        def spy_create(name, base_url, tools=None):
             create_agent_calls.append(name)
-            return original_create(name, base_url)
+            return original_create(name, base_url, tools)
 
         monkeypatch.setattr(cli_mod, "create_agent", spy_create)
 
@@ -295,3 +295,72 @@ class TestCrewWithAgentCache:
 
         # create_agent should NOT have been called for cached agents
         assert create_agent_calls == []
+
+
+class TestToolsIntegration:
+    """Tests for --no-tools flag and tool assignment."""
+
+    def test_run_help_shows_no_tools_flag(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["run", "--help"])
+        assert "--no-tools" in result.output
+
+    def test_main_help_shows_no_tools_flag(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--help"])
+        assert "--no-tools" in result.output
+
+    def test_create_agent_without_tools(self, mock_console, monkeypatch):
+        fake_agent_cls = MagicMock()
+        fake_llm_cls = MagicMock()
+
+        with unittest.mock.patch.dict(
+            "sys.modules",
+            {"crewai": MagicMock(Agent=fake_agent_cls, LLM=fake_llm_cls)},
+        ):
+            from bruno_swarm.cli import create_agent
+
+            create_agent("backend", "http://localhost:11434")
+
+        _, kwargs = fake_agent_cls.call_args
+        assert kwargs["tools"] == []
+
+    def test_create_agent_with_tools(self, mock_console, monkeypatch):
+        fake_agent_cls = MagicMock()
+        fake_llm_cls = MagicMock()
+
+        with unittest.mock.patch.dict(
+            "sys.modules",
+            {"crewai": MagicMock(Agent=fake_agent_cls, LLM=fake_llm_cls)},
+        ):
+            from bruno_swarm.cli import create_agent
+            from bruno_swarm.tools import create_orchestrator_tools
+
+            tools = create_orchestrator_tools()
+            create_agent("orchestrator", "http://localhost:11434", tools=tools)
+
+        _, kwargs = fake_agent_cls.call_args
+        assert len(kwargs["tools"]) == 4
+
+    def test_cache_separates_with_and_without_tools(self, mock_console, monkeypatch):
+        cli_mod = sys.modules["bruno_swarm.cli"]
+        call_count = 0
+
+        def fake_create_agent(name, base_url, tools=None):
+            nonlocal call_count
+            call_count += 1
+            return f"agent-{name}-{call_count}"
+
+        monkeypatch.setattr(cli_mod, "create_agent", fake_create_agent)
+
+        from bruno_swarm.tools import create_orchestrator_tools
+
+        cache: dict = {}
+        tools = create_orchestrator_tools()
+
+        # Same agent name but different tools => separate cache entries
+        r1 = _get_or_create_agent("orchestrator", "http://localhost:11434", cache)
+        r2 = _get_or_create_agent("orchestrator", "http://localhost:11434", cache, tools=tools)
+
+        assert r1 != r2
+        assert call_count == 2
