@@ -41,7 +41,7 @@ ruff format src/
 
 ### Single-package Python CLI (`src/bruno_swarm/`)
 
-- **`config.py`** — Single source of truth for all shared constants: `AGENT_CONFIGS` (7 agent definitions), `TASK_TEMPLATES`, `EXPECTED_OUTPUTS`, `HF_MODELS`, `SPECIALISTS`, `DEFAULT_OLLAMA_URL`, `HF_REPO`, and `make_step_callback()` factory.
+- **`config.py`** — Single source of truth for all shared constants: `AGENT_CONFIGS` (7 agent definitions), `TASK_TEMPLATES`, `EXPECTED_OUTPUTS`, `HF_MODELS`, `SPECIALISTS`, `DEFAULT_OLLAMA_URL`, `HF_REPO`, `ollama_api_get()` (shared Ollama HTTP utility), and `make_step_callback()` factory.
 - **`tools.py`** — Custom CrewAI tools for the orchestrator: `ShellTool` (execute commands), `FileWriteTool`, `FileReadTool`, `DirectoryListTool`. Uses `BaseTool` + Pydantic schemas. Only stdlib dependencies.
 - **`cli.py`** — Click CLI with 5 subcommands (`run`, `setup`, `agents`, `status`, `tui`) plus interactive REPL. Contains crew creation logic (`create_hierarchical_crew()`, `create_flat_crew()`), model downloading, and the `_run_interactive()` REPL.
 - **`tui.py`** — Textual-based full-screen chat TUI (`SwarmTUI` app). Optional dependency — works without textual installed via lazy import. Supports slash commands (`/help`, `/mode`, `/agents`, `/history`, `/save`, `/quit`).

@@ -195,6 +195,21 @@ EXPECTED_OUTPUTS = {
 }
 
 
+def ollama_api_get(ollama_url: str, endpoint: str) -> dict:
+    """GET an Ollama API endpoint and return parsed JSON.
+
+    Raises ``urllib.error.URLError`` on connection failure and
+    ``Exception`` for any other error.  Callers decide how to present
+    the error to users.
+    """
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(f"{ollama_url}{endpoint}", method="GET")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode())
+
+
 def make_step_callback(console):
     """Factory returning a CrewAI step_callback that prints progress to *console*.
 

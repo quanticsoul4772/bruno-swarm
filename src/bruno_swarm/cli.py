@@ -24,6 +24,7 @@ from .config import (
     SPECIALISTS,
     TASK_TEMPLATES,
     make_step_callback,
+    ollama_api_get,
 )
 from .logging import get_logger
 
@@ -85,14 +86,10 @@ def _validate_ollama_url(url: str) -> str:
 
 def _ollama_api_get(ollama_url: str, endpoint: str) -> dict:
     """GET an Ollama API endpoint and return parsed JSON, or exit on failure."""
-    import json
     import urllib.error
-    import urllib.request
 
     try:
-        req = urllib.request.Request(f"{ollama_url}{endpoint}", method="GET")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode())
+        return ollama_api_get(ollama_url, endpoint)
     except urllib.error.URLError as e:
         reason = getattr(e, "reason", e)
         console.print(f"[red]Cannot connect to Ollama: {reason}[/]")
@@ -837,9 +834,6 @@ def list_agents():
 )
 def check_status(ollama_url: str):
     """Check Ollama connectivity and loaded models."""
-    import json
-    import urllib.request
-
     _validate_ollama_url(ollama_url)
 
     console.print()
@@ -893,18 +887,16 @@ def check_status(ollama_url: str):
 
     # Show loaded models (currently in memory)
     try:
-        req = urllib.request.Request(f"{ollama_url}/api/ps", method="GET")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            ps_data = json.loads(resp.read().decode())
-            running = ps_data.get("models", [])
-            if running:
-                console.print()
-                console.print("[bold]Currently loaded in memory:[/]")
-                for m in running:
-                    name = m.get("name", "unknown")
-                    size_bytes = m.get("size", 0)
-                    size_str = f"{size_bytes / (1024**3):.1f} GB" if size_bytes else ""
-                    console.print(f"  [green]{name}[/] {size_str}")
+        ps_data = ollama_api_get(ollama_url, "/api/ps")
+        running = ps_data.get("models", [])
+        if running:
+            console.print()
+            console.print("[bold]Currently loaded in memory:[/]")
+            for m in running:
+                name = m.get("name", "unknown")
+                size_bytes = m.get("size", 0)
+                size_str = f"{size_bytes / (1024**3):.1f} GB" if size_bytes else ""
+                console.print(f"  [green]{name}[/] {size_str}")
     except Exception:
         pass  # /api/ps may not be available in older Ollama versions
 

@@ -6,10 +6,6 @@ for agentic coding tasks.
 """
 
 from crewai import LLM, Agent, Crew, Task
-from dotenv import load_dotenv
-
-# Load Ollama configuration
-load_dotenv(".env.crewai")
 
 
 def test_single_agent():

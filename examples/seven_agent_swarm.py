@@ -34,89 +34,12 @@ import traceback
 
 from crewai import LLM, Agent, Crew, Process, Task
 
+# Import configs from the package (avoids duplicating 100+ lines of agent definitions).
+# If running standalone without bruno-swarm installed, this will fail with ImportError.
+from bruno_swarm.config import AGENT_CONFIGS, SPECIALISTS
+
 # Disable CrewAI tracing prompt in non-interactive mode
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
-
-# Agent configurations: name -> (ollama_model, role, goal, backstory)
-AGENT_CONFIGS = {
-    "orchestrator": {
-        "model": "orchestrator",
-        "role": "Senior Software Architect",
-        "goal": "Plan development tasks, design system architecture, and coordinate the team",
-        "backstory": (
-            "Senior architect with 20 years of experience. Thinks step by step, "
-            "breaks complex problems into clear tasks, and delegates to specialists. "
-            "Reviews all work for quality and architectural consistency."
-        ),
-        "allow_delegation": True,
-    },
-    "frontend": {
-        "model": "frontend",
-        "role": "Frontend Developer",
-        "goal": "Build responsive, user-friendly React components with TypeScript",
-        "backstory": (
-            "Expert in React, TypeScript, Tailwind CSS. Writes clean, concise "
-            "code without over-engineering. Focuses on accessibility and UX."
-        ),
-        "allow_delegation": False,
-    },
-    "backend": {
-        "model": "backend",
-        "role": "Backend Developer",
-        "goal": "Create scalable FastAPI endpoints and database schemas",
-        "backstory": (
-            "Expert in FastAPI, PostgreSQL, async patterns. Focuses on clean "
-            "architecture without premature optimization. Writes clear API contracts."
-        ),
-        "allow_delegation": False,
-    },
-    "test": {
-        "model": "test",
-        "role": "QA Engineer",
-        "goal": "Write comprehensive test suites with high coverage",
-        "backstory": (
-            "Expert in pytest, coverage analysis, edge cases. Proactively writes "
-            "tests for all code paths including error handling and boundary conditions."
-        ),
-        "allow_delegation": False,
-    },
-    "security": {
-        "model": "security",
-        "role": "Security Engineer",
-        "goal": "Identify vulnerabilities and enforce secure coding practices",
-        "backstory": (
-            "Expert in OWASP Top 10, penetration testing, secure code review. "
-            "Paranoid about security -- catches issues others miss. Reviews all "
-            "code for injection, auth bypass, and data exposure risks."
-        ),
-        "allow_delegation": False,
-    },
-    "docs": {
-        "model": "docs",
-        "role": "Technical Writer",
-        "goal": "Write clear API docs, README files, and developer guides",
-        "backstory": (
-            "Expert in technical documentation, API references, and developer "
-            "onboarding. Writes concise docs without unnecessary jargon. "
-            "Focuses on examples and practical usage."
-        ),
-        "allow_delegation": False,
-    },
-    "devops": {
-        "model": "devops",
-        "role": "DevOps Engineer",
-        "goal": "Create Docker configs, CI/CD pipelines, and deployment scripts",
-        "backstory": (
-            "Expert in Docker, GitHub Actions, infrastructure as code. "
-            "Writes practical deployment configurations without overengineering. "
-            "Focuses on reproducibility and security."
-        ),
-        "allow_delegation": False,
-    },
-}
-
-# Specialist agent names (all except orchestrator)
-SPECIALISTS = ["frontend", "backend", "test", "security", "docs", "devops"]
 
 
 def create_llm(model_name: str, base_url: str) -> LLM:

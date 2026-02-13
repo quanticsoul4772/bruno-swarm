@@ -15,7 +15,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, RichLog
 
-from .config import AGENT_CONFIGS, DEFAULT_OLLAMA_URL, SPECIALISTS
+from .config import AGENT_CONFIGS, DEFAULT_OLLAMA_URL, SPECIALISTS, ollama_api_get
 from .widgets import AgentSidebar, ModeIndicator
 
 # Reverse lookup: role -> agent name (e.g. "Backend Developer" -> "backend")
@@ -173,14 +173,10 @@ class SwarmTUI(App):
     @work(thread=True)
     def _check_ollama_status(self) -> None:
         """Check Ollama connectivity in a background thread."""
-        import json
         import urllib.error
-        import urllib.request
 
         try:
-            req = urllib.request.Request(f"{self.ollama_url}/api/tags", method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
+            data = ollama_api_get(self.ollama_url, "/api/tags")
 
             models = data.get("models", [])
             model_names = {m.get("name", "").split(":")[0] for m in models}
